@@ -1100,11 +1100,12 @@ def fine_tune(self, train_data: List[Dict[str, str]],
         
         return min(noise_score, 1.0)  # Cap at 1.0
     
-    def _prepare_dataset(self, data: List[Dict[str, str]]) -> Dataset:
+    def _prepare_dataset(self, data: List[Dict[str, str]], is_cnn_dailymail: bool = False) -> Dataset:
         """Prepare a dataset for training or evaluation with enhanced preprocessing.
         
         Args:
             data: List of dictionaries with 'text' and 'summary' keys
+            is_cnn_dailymail: Flag indicating if the data is from CNN/DailyMail dataset
             
         Returns:
             HuggingFace Dataset ready for training or evaluation
@@ -1138,7 +1139,8 @@ def fine_tune(self, train_data: List[Dict[str, str]],
             summary = summary.strip()
             
             # 3. Add task-specific prefix for T5
-            input_text = f"summarize: {text}"
+            prefix = "summarize news: " if is_cnn_dailymail else "summarize: "
+            input_text = f"{prefix}{text}"
             
             # 4. Tokenize with appropriate padding and truncation
             try:

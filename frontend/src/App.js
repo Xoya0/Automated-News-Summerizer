@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
-import { Container, Typography, Box, TextField, Button, Paper, CircularProgress, Divider, FormControl, InputLabel, Select, MenuItem, Tooltip, IconButton, Rating, Snackbar, Alert, ThemeProvider, createTheme, CssBaseline } from '@mui/material';
-import { HelpOutline, ContentCopy, FormatListBulleted, Article, DarkMode, LightMode } from '@mui/icons-material';
+import { Container, Typography, Box, TextField, Button, Paper, CircularProgress, Divider, FormControl, InputLabel, Select, MenuItem, Tooltip, IconButton, Rating, Snackbar, Alert, ThemeProvider, createTheme, CssBaseline, Tab, Tabs } from '@mui/material';
+import { HelpOutline, ContentCopy, FormatListBulleted, Article, DarkMode, LightMode, Chat } from '@mui/icons-material';
 import axios from 'axios';
+import ChatComponent from './components/ChatComponent';
 
 // Create theme instances
 const lightTheme = createTheme({
@@ -86,6 +87,7 @@ function App() {
   const [outputFormat, setOutputFormat] = useState('paragraph');
   const [summary, setSummary] = useState('');
   const [summaryId, setSummaryId] = useState('');
+  const [chatSessionId, setChatSessionId] = useState('');
   const [loading, setLoading] = useState(false);
   const [showFeedback, setShowFeedback] = useState(false);
   const [feedbackRating, setFeedbackRating] = useState(0);
@@ -95,6 +97,7 @@ function App() {
   const [snackbarSeverity, setSnackbarSeverity] = useState('success');
   const [darkMode, setDarkMode] = useState(false);
   const [error, setError] = useState('');
+  const [activeTab, setActiveTab] = useState(0);
   
   // Theme
   const theme = darkMode ? darkTheme : lightTheme;
@@ -135,7 +138,20 @@ function App() {
       // Update state with response data
       setSummary(response.data.summary);
       setSummaryId(response.data.summary_id);
+      
+      // Ensure chatSessionId is properly set
+      if (response.data.chat_session_id) {
+        setChatSessionId(response.data.chat_session_id);
+        console.log('Chat session ID received:', response.data.chat_session_id);
+      } else {
+        // If backend doesn't provide chat_session_id, create one using summary_id
+        const generatedSessionId = `chat_${response.data.summary_id}`;
+        setChatSessionId(generatedSessionId);
+        console.log('Generated chat session ID:', generatedSessionId);
+      }
+      
       setShowFeedback(true);
+      setActiveTab(0); // Switch to summary tab
       
       // Show success message
       setSnackbarMessage('Summary generated successfully!');
@@ -356,24 +372,41 @@ function App() {
               </Button>
             </Paper>
 
-            {/* Summary Output Section */}
+            {/* Summary and Chat Tabs */}
             {summary && (
-              <Paper elevation={3} sx={{ p: 3, mb: 4 }} className="summary-container">
-                <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
-                  <Typography variant="h5" sx={{ fontWeight: 600 }}>
-                    Summary
-                  </Typography>
-                  <Tooltip title="Copy to clipboard">
-                    <IconButton onClick={handleCopySummary}>
-                      <ContentCopy />
-                    </IconButton>
-                  </Tooltip>
+              <>
+                <Box sx={{ borderBottom: 1, borderColor: 'divider', mb: 2 }}>
+                  <Tabs value={activeTab} onChange={(e, newValue) => setActiveTab(newValue)} aria-label="summary and chat tabs">
+                    <Tab icon={<Article />} label="Summary" />
+                    <Tab icon={<Chat />} label="Chat" disabled={!chatSessionId} />
+                  </Tabs>
                 </Box>
-                <Divider sx={{ my: 2 }} />
-                <Typography variant="body1" sx={{ whiteSpace: 'pre-wrap' }}>
-                  {summary}
-                </Typography>
-              </Paper>
+                
+                {/* Summary Tab */}
+                {activeTab === 0 && (
+                  <Paper elevation={3} sx={{ p: 3, mb: 4 }} className="summary-container">
+                    <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
+                      <Typography variant="h5" sx={{ fontWeight: 600 }}>
+                        Summary
+                      </Typography>
+                      <Tooltip title="Copy to clipboard">
+                        <IconButton onClick={handleCopySummary}>
+                          <ContentCopy />
+                        </IconButton>
+                      </Tooltip>
+                    </Box>
+                    <Divider sx={{ my: 2 }} />
+                    <Typography variant="body1" sx={{ whiteSpace: 'pre-wrap' }}>
+                      {summary}
+                    </Typography>
+                  </Paper>
+                )}
+                
+                {/* Chat Tab */}
+                {activeTab === 1 && (
+                  <ChatComponent summaryId={summaryId} chatSessionId={chatSessionId} />
+                )}
+              </>
             )}
 
             {/* Feedback Section */}

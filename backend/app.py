@@ -1,7 +1,5 @@
 import sys
 import os
-
-# Add the backend directory to Python path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from fastapi import FastAPI, HTTPException, Form, Request, File, UploadFile
@@ -14,6 +12,7 @@ import tempfile
 
 from model import T5Summarizer
 from utils import validate_input
+from gemini_integration import GeminiAIIntegration, HybridSummarizer
 
 # Initialize FastAPI app
 app = FastAPI(title="T5 Summarizer API", description="API for text summarization using T5 model")
@@ -51,11 +50,19 @@ app.add_middleware(TimeoutMiddleware, timeout=60)
 
 try:
     print("Initializing T5 summarizer model...")
-    summarizer = T5Summarizer(model_name="t5-small")
+    t5_model = T5Summarizer(model_name="t5-small")
     print("T5 summarizer model initialized successfully")
+    
+    print("Initializing Gemini AI integration...")
+    gemini_integration = GeminiAIIntegration()
+    print(f"Gemini AI integration initialized successfully (Available: {gemini_integration.is_available})")
+    
+    # Initialize hybrid summarizer
+    summarizer = HybridSummarizer(t5_model, gemini_integration)
+    print("Hybrid summarizer initialized successfully")
 except Exception as e:
-    print(f"Failed to initialize T5 summarizer model: {str(e)}")
-    raise RuntimeError(f"Model initialization failed: {str(e)}")
+    print(f"Failed to initialize summarizer models: {str(e)}")
+    print("WARNING: Model initialization failed. Some features might be unavailable.")
 
 # Define request models
 class SummarizationRequest(BaseModel):
@@ -65,6 +72,7 @@ class SummarizationRequest(BaseModel):
     tone: str = Field(default="neutral", description="Summary tone: 'neutral', 'analytical', or 'key_points'")
     post_process: bool = Field(default=True, description="Whether to apply post-processing to the summary")
     post_process_level: str = Field(default="basic", description="Post-processing level: 'basic', 'medium', or 'advanced'")
+    mode: str = Field(default="hybrid", description="Summarization mode: 't5', 'gemini', or 'hybrid'")
     
     class Config:
         schema_extra = {
@@ -74,7 +82,8 @@ class SummarizationRequest(BaseModel):
                 "length": "medium",
                 "tone": "neutral",
                 "post_process": True,
-                "post_process_level": "basic"
+                "post_process_level": "basic",
+                "mode": "hybrid"
             }
         }
 
@@ -90,6 +99,29 @@ class SummarizationResponse(BaseModel):
     original_text_length: int
     summary_length: int
     parameters: Dict[str, Any]
+    chat_session_id: Optional[str] = None
+    t5_summary: Optional[str] = None
+    gemini_summary: Optional[str] = None
+    comparison: Optional[Dict[str, Any]] = None
+
+class ChatRequest(BaseModel):
+    session_id: Optional[str] = None
+    summary_id: Optional[str] = None
+    message: str
+    
+    class Config:
+        schema_extra = {
+            "example": {
+                "session_id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                "message": "What are the main points of this article?"
+            }
+        }
+
+class ChatResponse(BaseModel):
+    response: str
+    session_id: str
+    timestamp: str
+    chat_history: List[Dict[str, str]]
 
 # API endpoints
 @app.get("/")
@@ -110,31 +142,59 @@ async def summarize(request: SummarizationRequest):
         
         # Generate summary with customized parameters
         try:
-            summary = summarizer.generate_summary(
+            # Use the hybrid summarizer with the requested mode
+            summary_results = summarizer.generate_summary(
                 text=content_or_error,
+                mode=request.mode,
                 length=request.length,
                 tone=request.tone,
                 post_process=request.post_process,
                 post_process_level=request.post_process_level
             )
             
+            # Get the final summary
+            final_summary = summary_results.get("final_summary", "")
+            
             # Create a unique ID for the summary (for feedback purposes)
             import hashlib
             import time
             summary_id = hashlib.md5(f"{content_or_error}{time.time()}".encode()).hexdigest()
             
+            # Store the original text and summary for chat sessions
+            # In a production system, this would be stored in a database
+            # For now, we'll create a chat session with the Gemini integration
+            chat_session_id = None
+            if gemini_integration.is_available:
+                chat_session_id = gemini_integration.create_chat_session(
+                    article_text=content_or_error,
+                    article_summary=final_summary
+                )
+            
+            # Prepare response data
             response_data = {
-                "summary": summary,
+                "summary": final_summary,
                 "summary_id": summary_id,
                 "original_text_length": len(content_or_error),
-                "summary_length": len(summary),
+                "summary_length": len(final_summary),
+                "chat_session_id": chat_session_id,  # Include the chat session ID in the response
                 "parameters": {
                     "length": request.length,
-                    "tone": request.tone
+                    "tone": request.tone,
+                    "mode": request.mode
                 }
             }
             
-            print(f"Successfully generated summary of length {len(summary)}")
+            # Add individual model summaries and comparison if available
+            if "t5_summary" in summary_results:
+                response_data["t5_summary"] = summary_results["t5_summary"]
+            
+            if "gemini_summary" in summary_results:
+                response_data["gemini_summary"] = summary_results["gemini_summary"]
+                
+            if "comparison" in summary_results:
+                response_data["comparison"] = summary_results["comparison"]
+            
+            print(f"Successfully generated summary of length {len(final_summary)} using {request.mode} mode")
             return response_data
             
         except Exception as e:
@@ -164,6 +224,99 @@ async def submit_feedback(request: FeedbackRequest):
 @app.get("/health")
 async def health_check():
     return {"status": "healthy"}
+
+@app.post("/chat", response_model=ChatResponse)
+async def chat_with_article(request: ChatRequest):
+    try:
+        # First check if Gemini AI is available
+        if not gemini_integration.is_available:
+            # Create a fallback response when Gemini is not available
+            from datetime import datetime
+            
+            # Create a simple response without Gemini
+            fallback_response = {
+                "response": "I'm sorry, but the chat feature is currently unavailable. The Gemini AI integration requires a valid API key. Please check with the administrator.",
+                "session_id": request.session_id or f"fallback_{request.summary_id}",
+                "timestamp": datetime.now().isoformat(),
+                "chat_history": []
+            }
+            
+            # If there's a message, add it to the chat history
+            if request.message:
+                fallback_response["chat_history"] = [
+                    {"role": "user", "content": request.message},
+                    {"role": "assistant", "content": fallback_response["response"]}
+                ]
+                
+            return fallback_response
+            
+        # If Gemini is available, proceed with normal flow
+        # Check if we need to create a new chat session
+        if not request.session_id and request.summary_id:
+            # Retrieve the summary by ID (in a production system, this would come from a database)
+            # For now, we'll just use the summary ID to create a new session
+            
+            # Create a new chat session
+            session_id = gemini_integration.create_chat_session(
+                article_text="",  # In a real system, you would retrieve the original text
+                article_summary=f"This is a summary with ID: {request.summary_id}"  # In a real system, you would retrieve the actual summary
+            )
+            
+            if not session_id:
+                raise HTTPException(status_code=500, detail="Failed to create chat session")
+                
+        else:
+            session_id = request.session_id
+            
+        if not session_id:
+            raise HTTPException(status_code=400, detail="Either session_id or summary_id must be provided")
+        
+        # Process the chat message
+        chat_response = gemini_integration.chat_with_article(
+            session_id=session_id,
+            user_message=request.message
+        )
+        
+        if "error" in chat_response:
+            raise HTTPException(status_code=500, detail=chat_response["error"])
+            
+        return chat_response
+        
+    except HTTPException as he:
+        raise he
+    except Exception as e:
+        error_msg = f"Unexpected error during chat: {str(e)}"
+        print(error_msg)
+        raise HTTPException(status_code=500, detail=error_msg)
+
+@app.post("/chat/new")
+async def create_chat_session(summary_id: str = Form(...)):
+    try:
+        # Check if Gemini AI is available
+        if not gemini_integration.is_available:
+            # Generate a fallback session ID when Gemini is not available
+            import uuid
+            fallback_session_id = f"fallback_{uuid.uuid4()}"
+            print(f"Gemini AI is not available. Using fallback session ID: {fallback_session_id}")
+            return {"session_id": fallback_session_id}
+            
+        # In a production system, you would retrieve the summary and original text from a database
+        # For this example, we'll just use placeholder text
+        
+        session_id = gemini_integration.create_chat_session(
+            article_text="This is the full article text. In a real system, this would be retrieved from storage.",
+            article_summary=f"This is the summary with ID: {summary_id}. In a real system, this would be retrieved from storage."
+        )
+        
+        if not session_id:
+            raise HTTPException(status_code=500, detail="Failed to create chat session")
+            
+        return {"session_id": session_id}
+        
+    except Exception as e:
+        error_msg = f"Error creating chat session: {str(e)}"
+        print(error_msg)
+        raise HTTPException(status_code=500, detail=error_msg)
 
 # Define fine-tuning request model
 class FineTuningRequest(BaseModel):

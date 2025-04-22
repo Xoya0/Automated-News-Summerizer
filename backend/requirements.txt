@@ -11,3 +11,4 @@ sentencepiece==0.1.99
 language-tool-python==2.7.1
 datasets==2.12.0
 evaluate==0.4.0
+google-generativeai>=0.3.0

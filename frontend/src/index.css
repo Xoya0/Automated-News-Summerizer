@@ -186,9 +186,25 @@ code {
   border-radius: 4px;
 }
 
+/* Remove transitions and hover effects */
+.MuiPaper-root {
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.MuiButton-contained {
+  background-color: #1976d2;
+  color: white;
+}
+
+.summary-container {
+  background-color: #ffffff;
+  border-radius: 8px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
 ::-webkit-scrollbar-thumb {
-  background: rgba(0, 0, 0, 0.2);
-  border-radius: 4px;
+  background-color: #888;
+  border-radius: 6px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
